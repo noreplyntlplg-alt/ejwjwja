@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title><?= appName ?></title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="loading" class="loading hidden">
+    <div class="loading-box">
+      <div class="spinner"></div>
+      <div id="loadingText">กำลังดำเนินการ...</div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand" onclick="showHome()">
+      <div class="brand-logo" id="brandLogo"><i class="fa-solid fa-school"></i></div>
+      <div>
+        <div class="brand-name" id="brandName"><?= appName ?></div>
+        <div class="brand-sub">ระบบรับสมัครนักเรียนออนไลน์</div>
+      </div>
+    </div>
+    <div class="top-actions" id="topActions">
+      <button class="btn btn-outline" onclick="showLoginChoice()"><i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ</button>
+    </div>
+  </header>
+
+  <main id="app" class="container"></main>
+
+  <footer class="footer">
+    <div id="footerName"><?= appName ?></div>
+    <div>ระบบรับสมัครนักเรียนออนไลน์</div>
+  </footer>
+
+  <?!= include('Scripts'); ?>
+</body>
+</html>
