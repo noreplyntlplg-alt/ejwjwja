@@ -1,0 +1,585 @@
+
+<script>
+const state = {
+  publicData:null, mode:'public', studentToken:null, staffToken:null,
+  student:null, staff:null, dashboard:null, currentApplication:null,
+  staffSection:'dashboard', charts:{}, rounds:[], programs:[], selectedRoundId:''
+};
+
+document.addEventListener('DOMContentLoaded', init);
+
+function init(){
+  loadPublic();
+}
+
+function api(fn,args=[]){
+  showLoading();
+  return new Promise((resolve,reject)=>{
+    google.script.run
+      .withSuccessHandler(r=>{hideLoading();resolve(r);})
+      .withFailureHandler(e=>{hideLoading();showError(e);reject(e);})[fn](...args);
+  });
+}
+function showLoading(t='กำลังดำเนินการ...'){document.getElementById('loadingText').textContent=t;document.getElementById('loading').classList.remove('hidden')}
+function hideLoading(){document.getElementById('loading').classList.add('hidden')}
+function showError(e){Swal.fire({icon:'error',title:'ไม่สามารถดำเนินการได้',text:e&&e.message?e.message:String(e),confirmButtonText:'ตกลง'})}
+function ok(title,text=''){return Swal.fire({icon:'success',title:title,text:text,confirmButtonText:'ตกลง'})}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function fmt(n){return Number(n||0).toLocaleString('th-TH')}
+function badge(s){
+  const x=String(s||'');
+  let c='badge';
+  if(['ผ่านการคัดเลือก','สอบผ่าน','ยืนยันสิทธิ์','อนุมัติ','APPROVED','VERIFIED'].includes(x)) c+=' badge-success';
+  else if(['เอกสารไม่สมบูรณ์','ไม่ผ่านการคัดเลือก','ปฏิเสธ','REJECTED'].includes(x)) c+=' badge-danger';
+  else if(['รอตรวจสอบ','PENDING','รอ'].includes(x)) c+=' badge-warning';
+  else c+=' badge-blue';
+  return `<span class="${c}">${esc(x)}</span>`;
+}
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve({name:file.name,mimeType:file.type,data:r.result});
+    r.onerror=reject;r.readAsDataURL(file);
+  });
+}
+function downloadDataUrl(dataUrl,fileName){
+  const a=document.createElement('a');a.href=dataUrl;a.download=fileName;document.body.appendChild(a);a.click();a.remove();
+}
+function setBrand(){
+  if(!state.publicData)return;
+  const s=state.publicData.settings||{};
+  document.getElementById('brandName').textContent=s.schoolName||'ระบบรับสมัครนักเรียน';
+  document.getElementById('footerName').textContent=s.schoolName||'ระบบรับสมัครนักเรียน';
+  if(s.schoolLogoUrl) document.getElementById('brandLogo').innerHTML=`<img src="${esc(s.schoolLogoUrl)}" alt="โลโก้โรงเรียน">`;
+}
+async function loadPublic(){
+  try{
+    state.publicData=await api('getPublicBootstrap');
+    setBrand();renderHome();
+  }catch(e){}
+}
+function showHome(){state.mode='public';renderHome()}
+function renderHome(){
+  const d=state.publicData||{settings:{},rounds:[]},s=d.settings||{};
+  document.getElementById('app').innerHTML=`
+    <section class="hero" ${s.bannerUrl?`style="background-image:linear-gradient(135deg,rgba(15,44,89,.95),rgba(36,79,135,.86)),url('${esc(s.bannerUrl)}');background-size:cover;background-position:center"`:''}>
+      <h1>${esc(s.homeTitle||s.schoolName||'ระบบรับสมัครนักเรียน')}</h1>
+      <p>${esc(s.homeSubtitle||'ระบบรับสมัครนักเรียนออนไลน์')}</p>
+      <div class="actions" style="margin-top:15px">
+        <button class="btn btn-gold" onclick="showRegister()"><i class="fa-solid fa-user-plus"></i> สมัครสมาชิก</button>
+        <button class="btn btn-outline" onclick="showLoginChoice()"><i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ</button>
+      </div>
+    </section>
+    <div class="grid grid-2">
+      <section class="card">
+        <div class="card-title"><i class="fa-solid fa-bullhorn"></i> ประกาศและคำแนะนำ</div>
+        <div class="notice">${esc(s.homeNotice||'กรุณาตรวจสอบรอบรับสมัครและเตรียมเอกสารให้ครบถ้วนก่อนสมัคร')}</div>
+        <div class="notice"><strong>การคุ้มครองข้อมูลส่วนบุคคล</strong><br>${esc(s.pdpaText||'')}</div>
+      </section>
+      <section class="card">
+        <div class="card-title"><i class="fa-solid fa-calendar-days"></i> รอบรับสมัครที่เปิดอยู่</div>
+        ${renderOpenRounds(d.rounds)}
+      </section>
+    </div>`;
+  document.getElementById('topActions').innerHTML=`<button class="btn btn-outline" onclick="showLoginChoice()"><i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ</button>`;
+}
+function renderOpenRounds(rounds){
+  if(!rounds||!rounds.length)return `<div class="empty">ขณะนี้ยังไม่มีรอบรับสมัครที่เปิดอยู่</div>`;
+  return rounds.map(r=>`
+    <div class="card" style="margin-bottom:9px;padding:12px">
+      <div style="font-weight:700;color:var(--navy);font-size:21px">${esc(r.roundName)}</div>
+      <div>ปีการศึกษา ${esc(r.academicYear)} | ${esc(r.roundType)}</div>
+      <div class="help">เปิด ${esc(r.openDate)} ถึง ${esc(r.closeDate)} | ค่าธรรมเนียม ${fmt(r.fee)} บาท</div>
+      <div class="actions" style="margin-top:7px"><button class="btn btn-primary btn-sm" onclick="showRegister('${esc(r.roundId)}')">สมัครรอบนี้</button></div>
+    </div>`).join('');
+}
+
+function showLoginChoice(){
+  Swal.fire({
+    title:'เข้าสู่ระบบ',
+    html:`<div class="actions" style="justify-content:center">
+      <button id="swStudent" class="btn btn-primary"><i class="fa-solid fa-user-graduate"></i> ผู้สมัครเรียน</button>
+      <button id="swStaff" class="btn btn-light"><i class="fa-solid fa-user-tie"></i> เจ้าหน้าที่</button></div>`,
+    showConfirmButton:false,showCloseButton:true
+  });
+  setTimeout(()=>{document.getElementById('swStudent').onclick=()=>{Swal.close();showStudentLogin()};document.getElementById('swStaff').onclick=()=>{Swal.close();showStaffLogin()}},50);
+}
+function showStudentLogin(){
+  document.getElementById('app').innerHTML=`
+  <div class="card" style="max-width:520px;margin:25px auto">
+    <div class="card-title"><i class="fa-solid fa-user-graduate"></i> เข้าสู่ระบบผู้สมัคร</div>
+    <div class="help">ใช้หมายเลขบัตรประจำตัวประชาชน 13 หลักของผู้สมัครที่ลงทะเบียนไว้แล้ว</div>
+    <div class="form-group" style="margin-top:12px"><label>หมายเลขบัตรประจำตัวประชาชน <span class="required">*</span></label><input id="studentCitizen" inputmode="numeric" maxlength="13" placeholder="กรอกเลข 13 หลัก"></div>
+    <div class="actions" style="margin-top:12px"><button class="btn btn-primary" onclick="studentLogin()"><i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ</button><button class="btn btn-light" onclick="showRegister()">สมัครสมาชิก</button></div>
+  </div>`;
+}
+async function studentLogin(){
+  const id=document.getElementById('studentCitizen').value.trim();
+  try{const r=await api('loginStudent',[id]);state.studentToken=r.token;state.student=r.student;state.dashboard=r.dashboard;state.mode='student';renderStudent();}
+  catch(e){}
+}
+function showStaffLogin(){
+  document.getElementById('app').innerHTML=`
+  <div class="card" style="max-width:520px;margin:25px auto">
+    <div class="card-title"><i class="fa-solid fa-user-shield"></i> เข้าสู่ระบบเจ้าหน้าที่</div>
+    <div class="form-group"><label>ชื่อผู้ใช้</label><input id="staffUser" autocomplete="username"></div>
+    <div class="form-group"><label>รหัสผ่าน</label><input id="staffPass" type="password" autocomplete="current-password"></div>
+    <div class="actions" style="margin-top:12px"><button class="btn btn-primary" onclick="staffLogin()">เข้าสู่ระบบ</button><button class="btn btn-light" onclick="showHome()">กลับหน้าหลัก</button></div>
+  </div>`;
+}
+async function staffLogin(){
+  try{const r=await api('loginStaff',[document.getElementById('staffUser').value,document.getElementById('staffPass').value]);state.staffToken=r.token;state.staff=r.user;state.mode='staff';await loadStaffData();renderStaff();}
+  catch(e){}
+}
+async function showRegister(roundId=''){
+  state.publicData=state.publicData||await api('getPublicBootstrap');
+  const rounds=state.publicData.rounds||[];
+  document.getElementById('app').innerHTML=`
+  <div class="card" style="max-width:760px;margin:15px auto">
+    <div class="card-title"><i class="fa-solid fa-user-plus"></i> สมัครสมาชิกผู้สมัคร</div>
+    <div class="notice">ผู้สมัครต้องสมัครสมาชิกก่อน จึงจะเข้าสู่ระบบและกรอกใบสมัครได้</div>
+    <div class="form-grid">
+      <div class="form-group"><label>คำนำหน้า</label><select id="regPrefix"><option value="">เลือก</option><option>เด็กชาย</option><option>เด็กหญิง</option><option>นาย</option><option>นางสาว</option></select></div>
+      <div class="form-group"><label>เลขบัตรประชาชน <span class="required">*</span></label><input id="regCitizen" maxlength="13" inputmode="numeric"></div>
+      <div class="form-group"><label>ชื่อ <span class="required">*</span></label><input id="regFirst"></div>
+      <div class="form-group"><label>นามสกุล <span class="required">*</span></label><input id="regLast"></div>
+      <div class="form-group"><label>วันเกิด</label><input id="regBirth" type="date"></div>
+      <div class="form-group"><label>โทรศัพท์ <span class="required">*</span></label><input id="regPhone" inputmode="tel"></div>
+      <div class="form-group full"><label>อีเมล</label><input id="regEmail" type="email"></div>
+      <div class="form-group full"><label class="file-box"><input id="regPDPA" type="checkbox"> ข้าพเจ้าอ่านและยินยอมให้โรงเรียนจัดเก็บและประมวลผลข้อมูลส่วนบุคคลตามประกาศ PDPA <span class="required">*</span></label></div>
+    </div>
+    <div class="actions" style="margin-top:12px"><button class="btn btn-primary" onclick="registerNow()"><i class="fa-solid fa-check"></i> สมัครสมาชิก</button><button class="btn btn-light" onclick="showHome()">ยกเลิก</button></div>
+    <div class="help" style="margin-top:10px">หากเคยสมัครแล้ว ให้เข้าสู่ระบบด้วยเลขบัตรประชาชน ไม่ต้องสมัครซ้ำ</div>
+  </div>`;
+  if(roundId) setTimeout(()=>{},50);
+}
+async function registerNow(){
+  const data={citizenId:document.getElementById('regCitizen').value,prefix:document.getElementById('regPrefix').value,
+    firstName:document.getElementById('regFirst').value,lastName:document.getElementById('regLast').value,
+    birthDate:document.getElementById('regBirth').value,phone:document.getElementById('regPhone').value,
+    email:document.getElementById('regEmail').value,pdpaConsent:document.getElementById('regPDPA').checked?'true':'false'};
+  try{await api('registerStudent',[data]);await ok('สมัครสมาชิกสำเร็จ','กรุณาเข้าสู่ระบบด้วยเลขบัตรประชาชน');showStudentLogin();}catch(e){}
+}
+
+/* ================= STUDENT ================= */
+function studentNav(active){
+  return `<aside class="sidebar">
+    <button class="nav-btn ${active==='dashboard'?'active':''}" onclick="studentSection('dashboard')"><i class="fa-solid fa-gauge"></i> ภาพรวม</button>
+    <button class="nav-btn ${active==='apply'?'active':''}" onclick="studentSection('apply')"><i class="fa-solid fa-file-pen"></i> กรอกใบสมัคร</button>
+    <button class="nav-btn ${active==='documents'?'active':''}" onclick="studentSection('documents')"><i class="fa-solid fa-folder-open"></i> เอกสาร</button>
+    <button class="nav-btn ${active==='payment'?'active':''}" onclick="studentSection('payment')"><i class="fa-solid fa-money-check-dollar"></i> ชำระค่าธรรมเนียม</button>
+    <button class="nav-btn ${active==='status'?'active':''}" onclick="studentSection('status')"><i class="fa-solid fa-list-check"></i> ตรวจสอบสถานะ</button>
+    <button class="nav-btn ${active==='exam'?'active':''}" onclick="studentSection('exam')"><i class="fa-solid fa-id-card"></i> บัตรประจำตัวสอบ</button>
+    <button class="nav-btn" onclick="studentLogout()"><i class="fa-solid fa-right-from-bracket"></i> ออกจากระบบ</button>
+  </aside>`;
+}
+function renderStudent(){
+  document.getElementById('topActions').innerHTML=`<span class="badge badge-blue">${esc(state.student?.firstName||'ผู้สมัคร')}</span><button class="btn btn-outline btn-sm" onclick="studentLogout()">ออกจากระบบ</button>`;
+  studentSection('dashboard');
+}
+async function refreshStudent(){
+  const r=await api('getStudentDashboard',[state.studentToken]);state.student=r.student;state.dashboard=r.dashboard;
+}
+async function studentSection(sec){
+  try{await refreshStudent();}catch(e){return}
+  const body=document.getElementById('app');
+  let content='';
+  if(sec==='dashboard')content=studentDashboardHTML();
+  if(sec==='apply')content=studentApplyHTML();
+  if(sec==='documents')content=studentDocumentsHTML();
+  if(sec==='payment')content=studentPaymentHTML();
+  if(sec==='status')content=studentStatusHTML();
+  if(sec==='exam')content=studentExamHTML();
+  body.innerHTML=`<div class="sidebar-layout">${studentNav(sec)}<section class="dashboard-content">${content}</section></div>`;
+  if(sec==='apply')populateApplyRound();
+}
+function studentDashboardHTML(){
+  const apps=state.dashboard||[];
+  return `<div class="card-title">ภาพรวมผู้สมัคร</div>
+  <div class="grid grid-3">
+    <div class="card stat"><div class="label">ชื่อผู้สมัคร</div><div class="value" style="font-size:24px">${esc(state.student?.firstName)} ${esc(state.student?.lastName)}</div></div>
+    <div class="card stat"><div class="label">จำนวนใบสมัคร</div><div class="value">${apps.length}</div></div>
+    <div class="card stat"><div class="label">เลขบัตรประชาชน</div><div class="value" style="font-size:20px">${esc(state.student?.citizenId)}</div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="card-title"><i class="fa-solid fa-file-circle-check"></i> ใบสมัครของฉัน</div>
+    ${apps.length?apps.map(x=>studentAppCard(x)).join(''):'<div class="empty">ยังไม่มีใบสมัคร กรุณาเลือกเมนูกรอกใบสมัคร</div>'}</div>`;
+}
+function studentAppCard(x){
+  const a=x.application,r=x.round,p=x.program;
+  return `<div class="card" style="margin-bottom:10px">
+    <div class="grid grid-2">
+      <div><strong>เลขที่สมัคร:</strong> ${esc(a.applicationNo)}<br><strong>รอบ:</strong> ${esc(r.roundName||'')}<br><strong>แผนการเรียน:</strong> ${esc(p.programName||'')}</div>
+      <div><strong>สถานะ:</strong> ${badge(a.status)}<br><strong>เอกสาร:</strong> ${x.documents?.length||0} รายการ<br><strong>ชำระเงิน:</strong> ${x.payment?badge(x.payment.status):badge('ยังไม่มีรายการ')}</div>
+    </div>
+  </div>`;
+}
+function studentApplyHTML(){
+  const existing=state.dashboard||[];
+  if(existing.length)return `<div class="card"><div class="card-title">กรอกใบสมัคร</div><div class="notice">คุณมีใบสมัครแล้ว หากต้องการติดตามเอกสารหรือผลการสมัคร ให้ใช้เมนูด้านซ้าย</div>${existing.map(studentAppCard).join('')}</div>`;
+  return `<div class="card">
+    <div class="card-title"><i class="fa-solid fa-file-pen"></i> ใบสมัครนักเรียน</div>
+    <div class="stepper"><span class="step active">1 รอบ/แผน</span><span class="step">2 ข้อมูลส่วนตัว</span><span class="step">3 ครอบครัว</span><span class="step">4 การศึกษา</span><span class="step">5 ที่อยู่/เพิ่มเติม</span></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>รอบรับสมัคร <span class="required">*</span></label><select id="appRound" onchange="populateApplyPrograms()"><option value="">เลือก</option></select></div>
+      <div class="form-group full"><label>แผนการเรียน / โควตา <span class="required">*</span></label><select id="appProgram"><option value="">เลือกรอบก่อน</option></select></div>
+      <div class="form-group"><label>คำนำหน้า</label><select id="aPrefix"><option value="">เลือก</option><option>เด็กชาย</option><option>เด็กหญิง</option><option>นาย</option><option>นางสาว</option></select></div>
+      <div class="form-group"><label>ชื่อ <span class="required">*</span></label><input id="aFirst" value="${esc(state.student?.firstName||'')}"></div>
+      <div class="form-group"><label>นามสกุล <span class="required">*</span></label><input id="aLast" value="${esc(state.student?.lastName||'')}"></div>
+      <div class="form-group"><label>ชื่อเล่น</label><input id="aNick"></div>
+      <div class="form-group"><label>วันเกิด <span class="required">*</span></label><input id="aBirth" type="date" value="${esc(state.student?.birthDate||'')}"></div>
+      <div class="form-group"><label>สัญชาติ</label><input id="aNationality" value="ไทย"></div>
+      <div class="form-group"><label>ศาสนา</label><input id="aReligion"></div>
+      <div class="form-group"><label>โทรศัพท์ <span class="required">*</span></label><input id="aPhone" value="${esc(state.student?.phone||'')}"></div>
+      <div class="form-group"><label>อีเมล</label><input id="aEmail" value="${esc(state.student?.email||'')}"></div>
+      <div class="form-group full"><label>ที่อยู่</label></div>
+      <div class="form-group"><label>บ้านเลขที่</label><input id="aNo"></div><div class="form-group"><label>หมู่</label><input id="aVillage"></div>
+      <div class="form-group"><label>ซอย</label><input id="aSoi"></div><div class="form-group"><label>ถนน</label><input id="aRoad"></div>
+      <div class="form-group"><label>ตำบล/แขวง</label><input id="aSubdistrict"></div><div class="form-group"><label>อำเภอ/เขต</label><input id="aDistrict"></div>
+      <div class="form-group"><label>จังหวัด</label><input id="aProvince"></div><div class="form-group"><label>รหัสไปรษณีย์</label><input id="aPostal"></div>
+      <div class="form-group full"><label>ข้อมูลผู้ปกครองคนที่ 1</label></div>
+      <div class="form-group"><label>คำนำหน้า</label><select id="p1Prefix"><option value="">เลือก</option><option>นาย</option><option>นาง</option><option>นางสาว</option></select></div>
+      <div class="form-group"><label>ชื่อ-สกุล <span class="required">*</span></label><input id="p1Name"></div>
+      <div class="form-group"><label>ความสัมพันธ์</label><input id="p1Relation" placeholder="บิดา / มารดา / ผู้ปกครอง"></div>
+      <div class="form-group"><label>อาชีพ</label><input id="p1Occupation"></div>
+      <div class="form-group"><label>เบอร์โทร <span class="required">*</span></label><input id="p1Phone"></div>
+      <div class="form-group full"><label>ข้อมูลผู้ปกครองคนที่ 2</label></div>
+      <div class="form-group"><label>คำนำหน้า</label><select id="p2Prefix"><option value="">เลือก</option><option>นาย</option><option>นาง</option><option>นางสาว</option></select></div>
+      <div class="form-group"><label>ชื่อ-สกุล</label><input id="p2Name"></div>
+      <div class="form-group"><label>ความสัมพันธ์</label><input id="p2Relation"></div><div class="form-group"><label>อาชีพ</label><input id="p2Occupation"></div><div class="form-group"><label>เบอร์โทร</label><input id="p2Phone"></div>
+      <div class="form-group full"><label>ประวัติการศึกษา</label></div>
+      <div class="form-group full"><label>โรงเรียนเดิม <span class="required">*</span></label><input id="aSchool"></div>
+      <div class="form-group"><label>จังหวัดโรงเรียนเดิม</label><input id="aSchoolProvince"></div>
+      <div class="form-group"><label>ปีที่จบ</label><input id="aGradYear" inputmode="numeric"></div>
+      <div class="form-group"><label>เกรดเฉลี่ยสะสม (GPA) <span class="required">*</span></label><input id="aGpa" type="number" min="0" max="4" step="0.01"></div>
+      <div class="form-group"><label>รหัสนักเรียนเดิม</label><input id="aStudentCode"></div>
+      <div class="form-group full"><label>ข้อมูลเพิ่มเติม / ความต้องการพิเศษ</label><textarea id="aSpecial"></textarea></div>
+      <div class="form-group"><label>ผู้ติดต่อกรณีฉุกเฉิน</label><input id="aEmergency"></div>
+      <div class="form-group"><label>โทรศัพท์ฉุกเฉิน</label><input id="aEmergencyPhone"></div>
+      <div class="form-group full"><label>หมายเหตุ</label><textarea id="aNotes"></textarea></div>
+    </div>
+    <div class="notice">เมื่อกดส่งใบสมัคร ข้อมูลจะถูกส่งให้เจ้าหน้าที่ตรวจสอบ และไม่ควรสร้างใบสมัครซ้ำในรอบเดียวกัน</div>
+    <div class="actions"><button class="btn btn-primary" onclick="submitApplication()"><i class="fa-solid fa-paper-plane"></i> ส่งใบสมัคร</button></div>
+  </div>`;
+}
+function populateApplyRound(){
+  const sel=document.getElementById('appRound');if(!sel)return;
+  sel.innerHTML='<option value="">เลือก</option>'+(state.publicData.rounds||[]).map(r=>`<option value="${esc(r.roundId)}">${esc(r.academicYear)} - ${esc(r.roundName)}</option>`).join('');
+}
+function populateApplyPrograms(){
+  const r=(state.publicData.rounds||[]).find(x=>String(x.roundId)===String(document.getElementById('appRound').value));
+  const sel=document.getElementById('appProgram');
+  sel.innerHTML='<option value="">เลือก</option>'+((r&&r.programs)||[]).map(p=>`<option value="${esc(p.programId)}" ${Number(p.remaining)<=0?'disabled':''}>${esc(p.programName)} | รับ ${fmt(p.capacity)} | เหลือ ${fmt(p.remaining)} | GPA ขั้นต่ำ ${p.minimumGpa}</option>`).join('');
+}
+async function submitApplication(){
+  const v=id=>document.getElementById(id)?.value||'';
+  const data={roundId:v('appRound'),programId:v('appProgram'),prefix:v('aPrefix'),firstName:v('aFirst'),lastName:v('aLast'),
+    nickname:v('aNick'),birthDate:v('aBirth'),nationality:v('aNationality'),religion:v('aReligion'),phone:v('aPhone'),email:v('aEmail'),
+    addressNo:v('aNo'),village:v('aVillage'),soi:v('aSoi'),road:v('aRoad'),subdistrict:v('aSubdistrict'),district:v('aDistrict'),province:v('aProvince'),postalCode:v('aPostal'),
+    parent1Prefix:v('p1Prefix'),parent1Name:v('p1Name'),parent1Relation:v('p1Relation'),parent1Occupation:v('p1Occupation'),parent1Phone:v('p1Phone'),
+    parent2Prefix:v('p2Prefix'),parent2Name:v('p2Name'),parent2Relation:v('p2Relation'),parent2Occupation:v('p2Occupation'),parent2Phone:v('p2Phone'),
+    schoolName:v('aSchool'),schoolProvince:v('aSchoolProvince'),graduationYear:v('aGradYear'),gpa:v('aGpa'),studentCode:v('aStudentCode'),
+    specialNeeds:v('aSpecial'),emergencyName:v('aEmergency'),emergencyPhone:v('aEmergencyPhone'),notes:v('aNotes')};
+  try{const r=await api('createApplication',[state.studentToken,data]);await ok('ส่งใบสมัครสำเร็จ','เลขที่สมัคร '+r.application.applicationNo);await refreshStudent();studentSection('documents');}catch(e){}
+}
+function currentApp(){return (state.dashboard||[])[0]||null}
+function studentDocumentsHTML(){
+  const apps=state.dashboard||[];
+  if(!apps.length)return `<div class="card empty">ยังไม่มีใบสมัคร</div>`;
+  return apps.map(x=>`
+    <div class="card" style="margin-bottom:12px"><div class="card-title">${esc(x.application.applicationNo)} - เอกสารประกอบ</div>
+    ${['รูปถ่าย','สำเนาบัตรประชาชน','สำเนาทะเบียนบ้าน','ปพ.1'].map(t=>{
+      const d=(x.documents||[]).filter(z=>String(z.documentType)===t).sort((a,b)=>String(b.uploadedAt).localeCompare(String(a.uploadedAt)))[0];
+      return `<div class="file-box" style="margin:8px 0"><div><strong>${t}</strong> ${d?badge(d.status):badge('ยังไม่ได้ส่ง')}</div>
+      ${d?`<div class="help">${esc(d.fileName)} ${d.reviewNote?'<br>หมายเหตุ: '+esc(d.reviewNote):''}</div>`:''}
+      <div style="margin-top:7px"><input type="file" id="file_${esc(x.application.applicationId)}_${esc(t)}" accept=".jpg,.jpeg,.png,.webp,.pdf">
+      <button class="btn btn-light btn-sm" onclick="uploadDoc('${esc(x.application.applicationId)}','${esc(t)}','file_${esc(x.application.applicationId)}_${esc(t)}')">อัปโหลด/ส่งใหม่</button></div></div>`;
+    }).join('')}</div>`).join('');
+}
+async function uploadDoc(appId,type,inputId){
+  const f=document.getElementById(inputId).files[0];if(!f)return Swal.fire('กรุณาเลือกไฟล์','','warning');
+  try{const file=await fileToBase64(f);await api('uploadStudentDocument',[state.studentToken,{applicationId:appId,documentType:type,file:file}]);await ok('อัปโหลดสำเร็จ');studentSection('documents');}catch(e){}
+}
+function studentPaymentHTML(){
+  const apps=state.dashboard||[];
+  if(!apps.length)return `<div class="card empty">ยังไม่มีใบสมัคร</div>`;
+  return apps.map(x=>{const r=x.round||{},p=x.payment;return `<div class="card" style="margin-bottom:12px">
+    <div class="card-title"><i class="fa-solid fa-money-check-dollar"></i> ${esc(x.application.applicationNo)}</div>
+    <div class="grid grid-3"><div><strong>ค่าธรรมเนียม:</strong><br>${fmt(r.fee)} บาท</div><div><strong>สถานะ:</strong><br>${p?badge(p.status):badge('ยังไม่มีรายการ')}</div><div><strong>รอบ:</strong><br>${esc(r.roundName)}</div></div>
+    <div class="notice">โปรดชำระตามช่องทางที่โรงเรียนกำหนด แล้วแนบสลิปเพื่อให้เจ้าหน้าที่ตรวจสอบ</div>
+    <div class="form-grid"><div class="form-group"><label>วิธีชำระ</label><select id="payMethod_${x.application.applicationId}"><option>โอนเงิน</option><option>QR Code</option><option>อื่น ๆ</option></select></div>
+    <div class="form-group"><label>เลขอ้างอิง/เลขรายการ</label><input id="payRef_${x.application.applicationId}"></div>
+    <div class="form-group"><label>วันที่ชำระ</label><input type="date" id="payDate_${x.application.applicationId}"></div>
+    <div class="form-group"><label>เวลา</label><input type="time" id="payTime_${x.application.applicationId}"></div>
+    <div class="form-group full"><label>สลิปการโอน <span class="required">*</span></label><input type="file" id="payFile_${x.application.applicationId}" accept=".jpg,.jpeg,.png,.webp,.pdf"></div></div>
+    <button class="btn btn-primary" onclick="submitPay('${esc(x.application.applicationId)}')">แจ้งชำระเงิน</button>
+  </div>`}).join('');
+}
+async function submitPay(appId){
+  const f=document.getElementById('payFile_'+appId).files[0];if(!f)return Swal.fire('กรุณาแนบสลิป','','warning');
+  try{const file=await fileToBase64(f);await api('submitPaymentSlip',[state.studentToken,{applicationId:appId,method:document.getElementById('payMethod_'+appId).value,referenceNo:document.getElementById('payRef_'+appId).value,bankDate:document.getElementById('payDate_'+appId).value,bankTime:document.getElementById('payTime_'+appId).value,file:file}]);await ok('ส่งหลักฐานการชำระเงินแล้ว');studentSection('payment');}catch(e){}
+}
+function studentStatusHTML(){
+  const apps=state.dashboard||[];
+  return `<div class="card"><div class="card-title"><i class="fa-solid fa-list-check"></i> ตรวจสอบสถานะ</div>${apps.length?apps.map(x=>`
+  <div class="card" style="margin-bottom:10px"><div><strong>${esc(x.application.applicationNo)}</strong> ${badge(x.application.status)}</div>
+  <div style="margin-top:8px">เอกสาร: ${x.documents?.length||0} รายการ | การชำระเงิน: ${x.payment?badge(x.payment.status):badge('ยังไม่มีรายการ')} | บัตรสอบ: ${x.exam?badge('มีเลขที่นั่งสอบ'):badge('ยังไม่มี')}</div>
+  ${x.documents?.some(d=>d.status==='REJECTED')?'<div class="notice">มีเอกสารที่ต้องส่งใหม่ กรุณาเปิดเมนูเอกสารเพื่อดูหมายเหตุ</div>':''}
+  ${x.application.status==='SELECTED'?`<div class="actions" style="margin-top:9px"><button class="btn btn-success" onclick="confirmStudentRight('${esc(x.application.applicationId)}')">ยืนยันสิทธิ์</button></div>`:''}
+  </div>`).join(''):'<div class="empty">ยังไม่มีใบสมัคร</div>'}</div>`;
+}
+async function confirmStudentRight(id){
+  const c=await Swal.fire({icon:'question',title:'ยืนยันสิทธิ์',text:'เมื่อยืนยันแล้ว สถานะจะเปลี่ยนเป็นยืนยันสิทธิ์',showCancelButton:true,confirmButtonText:'ยืนยัน',cancelButtonText:'ยกเลิก'});
+  if(!c.isConfirmed)return;
+  try{await api('confirmRight',[state.studentToken,id]);await ok('ยืนยันสิทธิ์สำเร็จ');studentSection('status')}catch(e){}
+}
+function studentExamHTML(){
+  const apps=state.dashboard||[];
+  return `<div class="card"><div class="card-title"><i class="fa-solid fa-id-card"></i> บัตรประจำตัวสอบ</div>${apps.length?apps.map(x=>`
+  <div class="card" style="margin-bottom:10px"><strong>${esc(x.application.applicationNo)}</strong> ${badge(x.application.status)}
+  ${x.exam?`<div class="grid grid-4" style="margin-top:10px"><div>วันสอบ<br><strong>${esc(x.exam.examDate)}</strong></div><div>เวลา<br><strong>${esc(x.exam.examTime)}</strong></div><div>ห้อง<br><strong>${esc(x.exam.room)}</strong></div><div>เลขที่นั่ง<br><strong>${esc(x.exam.seatNo)}</strong></div></div><div class="actions" style="margin-top:10px"><button class="btn btn-primary" onclick="downloadExamTicket('${esc(x.application.applicationId)}')">พิมพ์บัตรประจำตัวสอบ PDF</button></div>`:'<div class="empty">ยังไม่ได้จัดเลขที่นั่งสอบ</div>'}</div>`).join(''):'<div class="empty">ยังไม่มีใบสมัคร</div>'}</div>`;
+}
+async function downloadExamTicket(id){try{const r=await api('generateExamTicket',[state.studentToken,id]);downloadDataUrl(r.data,r.fileName)}catch(e){}}
+function studentLogout(){state.studentToken=null;state.student=null;state.dashboard=null;showHome()}
+
+/* ================= STAFF ================= */
+async function loadStaffData(){
+  const d=await api('getStaffDashboard',[state.staffToken]);state.dashboardStaff=d;
+  const rp=await api('getRoundsAndProgramsForAdmin',[state.staffToken]);state.rounds=rp.rounds;state.programs=rp.programs;
+}
+function renderStaff(){
+  document.getElementById('topActions').innerHTML=`<span class="badge badge-blue">${esc(state.staff?.displayName||state.staff?.username)}</span><button class="btn btn-outline btn-sm" onclick="staffLogout()">ออกจากระบบ</button>`;
+  staffSection('dashboard');
+}
+function staffNav(active){
+  const admin=state.staff?.role==='ADMIN';
+  return `<aside class="sidebar">
+    <button class="nav-btn ${active==='dashboard'?'active':''}" onclick="staffSection('dashboard')"><i class="fa-solid fa-chart-pie"></i> Dashboard</button>
+    <button class="nav-btn ${active==='applications'?'active':''}" onclick="staffSection('applications')"><i class="fa-solid fa-file-lines"></i> ใบสมัคร</button>
+    <button class="nav-btn ${active==='documents'?'active':''}" onclick="staffSection('documents')"><i class="fa-solid fa-folder-check"></i> ตรวจเอกสาร</button>
+    <button class="nav-btn ${active==='payments'?'active':''}" onclick="staffSection('payments')"><i class="fa-solid fa-money-check"></i> ตรวจชำระเงิน</button>
+    <button class="nav-btn ${active==='exams'?'active':''}" onclick="staffSection('exams')"><i class="fa-solid fa-chair"></i> จัดการสอบ</button>
+    <button class="nav-btn ${active==='results'?'active':''}" onclick="staffSection('results')"><i class="fa-solid fa-square-poll-vertical"></i> ผลสอบ/ผลคัดเลือก</button>
+    ${admin?`<button class="nav-btn ${active==='rounds'?'active':''}" onclick="staffSection('rounds')"><i class="fa-solid fa-calendar-plus"></i> รอบรับสมัคร</button>
+    <button class="nav-btn ${active==='programs'?'active':''}" onclick="staffSection('programs')"><i class="fa-solid fa-layer-group"></i> แผนการเรียน/โควตา</button>
+    <button class="nav-btn ${active==='users'?'active':''}" onclick="staffSection('users')"><i class="fa-solid fa-users-gear"></i> ผู้ใช้งาน</button>
+    <button class="nav-btn ${active==='settings'?'active':''}" onclick="staffSection('settings')"><i class="fa-solid fa-gear"></i> ตั้งค่าระบบ</button>`:''}
+    <button class="nav-btn ${active==='reports'?'active':''}" onclick="staffSection('reports')"><i class="fa-solid fa-file-pdf"></i> รายงาน/Export</button>
+    <button class="nav-btn" onclick="staffLogout()"><i class="fa-solid fa-right-from-bracket"></i> ออกจากระบบ</button>
+  </aside>`;
+}
+async function staffSection(sec){
+  state.staffSection=sec;
+  try{if(sec==='dashboard')state.dashboardStaff=await api('getStaffDashboard',[state.staffToken]);}catch(e){return}
+  let content='';
+  if(sec==='dashboard')content=staffDashboardHTML();
+  if(sec==='applications')content=staffApplicationsHTML();
+  if(sec==='documents')content=staffDocumentsHTML();
+  if(sec==='payments')content=staffPaymentsHTML();
+  if(sec==='exams')content=staffExamsHTML();
+  if(sec==='results')content=staffResultsHTML();
+  if(sec==='rounds')content=staffRoundsHTML();
+  if(sec==='programs')content=staffProgramsHTML();
+  if(sec==='users')content=staffUsersHTML();
+  if(sec==='settings')content=staffSettingsHTML();
+  if(sec==='reports')content=staffReportsHTML();
+  document.getElementById('app').innerHTML=`<div class="sidebar-layout">${staffNav(sec)}<section class="dashboard-content">${content}</section></div>`;
+  if(sec==='dashboard')drawDashboardChart();
+}
+function staffDashboardHTML(){
+  const d=state.dashboardStaff||{};
+  return `<div class="card-title">Dashboard ภาพรวมการรับสมัคร</div>
+  <div class="grid grid-4">
+    <div class="card stat"><div class="label">ผู้สมัครทั้งหมด</div><div class="value">${fmt(d.totalApplicants)}</div></div>
+    <div class="card stat"><div class="label">สมัครวันนี้</div><div class="value">${fmt(d.todayApplicants)}</div></div>
+    <div class="card stat"><div class="label">ชำระเงินแล้ว</div><div class="value">${fmt(d.paid)}</div></div>
+    <div class="card stat"><div class="label">มีสิทธิ์สอบ</div><div class="value">${fmt(d.eligible)}</div></div>
+    <div class="card stat"><div class="label">ผ่านการคัดเลือก</div><div class="value">${fmt(d.selected)}</div></div>
+    <div class="card stat"><div class="label">ตัวสำรอง</div><div class="value">${fmt(d.waitlist)}</div></div>
+    <div class="card stat"><div class="label">รอบรับสมัคร</div><div class="value">${fmt(d.rounds)}</div></div>
+    <div class="card stat"><div class="label">แผนการเรียน</div><div class="value">${fmt(d.programs)}</div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="card-title">จำนวนผู้สมัครแยกตามแผนการเรียน</div><div class="chart-box"><canvas id="programChart"></canvas></div></div>`;
+}
+function drawDashboardChart(){
+  const ctx=document.getElementById('programChart');if(!ctx)return;
+  const data=state.dashboardStaff?.byProgram||{};
+  if(state.charts.program)state.charts.program.destroy();
+  state.charts.program=new Chart(ctx,{type:'bar',data:{labels:Object.keys(data),datasets:[{label:'จำนวนผู้สมัคร',data:Object.values(data)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+}
+function staffApplicationsHTML(){
+  return `<div class="card"><div class="card-title">จัดการใบสมัคร</div>
+  <div class="form-grid"><div class="form-group"><label>ค้นหา</label><input id="appSearch" placeholder="เลขที่สมัคร ชื่อ นามสกุล หรือเลขบัตร"></div>
+  <div class="form-group"><label>สถานะ</label><select id="appStatus"><option value="">ทั้งหมด</option>${['รอตรวจสอบ','เอกสารไม่สมบูรณ์','มีสิทธิ์สอบ','สอบผ่าน','ผ่านการคัดเลือก','ตัวสำรอง','ไม่ผ่านการคัดเลือก','ยืนยันสิทธิ์'].map(x=>`<option>${x}</option>`).join('')}</select></div></div>
+  <div class="actions" style="margin:10px 0"><button class="btn btn-primary" onclick="searchApplications()">ค้นหา</button></div><div id="applicationResults"></div></div>`;
+}
+async function searchApplications(){
+  try{const r=await api('listApplications',[state.staffToken,{search:document.getElementById('appSearch').value,status:document.getElementById('appStatus').value}]);document.getElementById('applicationResults').innerHTML=renderApplicationTable(r)}catch(e){}
+}
+function renderApplicationTable(rows){
+  if(!rows.length)return '<div class="empty">ไม่พบข้อมูล</div>';
+  return `<div class="table-wrap"><table><thead><tr><th>เลขที่</th><th>ชื่อ</th><th>รอบ</th><th>แผน</th><th>สถานะ</th><th>การทำงาน</th></tr></thead><tbody>${rows.map(x=>`<tr>
+  <td>${esc(x.application.applicationNo)}</td><td>${esc(x.application.prefix)}${esc(x.application.firstName)} ${esc(x.application.lastName)}</td><td>${esc(x.round.roundName)}</td><td>${esc(x.program.programName)}</td><td>${badge(x.application.status)}</td>
+  <td><button class="btn btn-light btn-sm" onclick="viewApplication('${esc(x.application.applicationId)}')">ดูรายละเอียด</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+async function viewApplication(id){
+  try{const d=await api('getApplicationDetail',[state.staffToken,id]);
+    const a=d.application;
+    Swal.fire({title:'รายละเอียดใบสมัคร '+a.applicationNo,width:900,html:`<div class="form-grid" style="text-align:left">
+      <div><strong>ชื่อ:</strong> ${esc(a.prefix)}${esc(a.firstName)} ${esc(a.lastName)}</div><div><strong>สถานะ:</strong> ${badge(a.status)}</div>
+      <div><strong>เลขบัตรประชาชน:</strong> ${esc(d.student.citizenId)}</div><div><strong>โทร:</strong> ${esc(a.phone)}</div>
+      <div><strong>โรงเรียนเดิม:</strong> ${esc(a.schoolName)}</div><div><strong>GPA:</strong> ${esc(a.gpa)}</div>
+      <div><strong>ผู้ปกครอง:</strong> ${esc(a.parent1Name)}</div><div><strong>โทรผู้ปกครอง:</strong> ${esc(a.parent1Phone)}</div>
+      <div class="full"><strong>ที่อยู่:</strong> ${esc([a.addressNo,a.village,a.soi,a.road,a.subdistrict,a.district,a.province,a.postalCode].filter(Boolean).join(' '))}</div>
+      <div class="full"><strong>หมายเหตุ:</strong> ${esc(a.notes)}</div></div>
+      <hr><div class="actions"><select id="detailStatus"><option>รอตรวจสอบ</option><option>เอกสารไม่สมบูรณ์</option><option>มีสิทธิ์สอบ</option><option>สอบผ่าน</option><option>ผ่านการคัดเลือก</option><option>ตัวสำรอง</option><option>ไม่ผ่านการคัดเลือก</option><option>ยืนยันสิทธิ์</option></select><button id="saveDetailStatus" class="btn btn-primary">บันทึกสถานะ</button></div>`,showConfirmButton:false,showCloseButton:true});
+    setTimeout(()=>{document.getElementById('detailStatus').value=a.status;document.getElementById('saveDetailStatus').onclick=async()=>{await api('updateApplicationByStaff',[state.staffToken,id,{status:document.getElementById('detailStatus').value}]);Swal.close();searchApplications();}},50);
+  }catch(e){}
+}
+function staffDocumentsHTML(){return `<div class="card"><div class="card-title">ตรวจสอบเอกสาร</div><div class="actions"><button class="btn btn-primary" onclick="loadDocumentQueue()">โหลดรายการเอกสารรอตรวจ</button></div><div id="documentQueue" style="margin-top:10px"></div></div>`}
+async function loadDocumentQueue(){
+  try{const rows=await api('listApplications',[state.staffToken,{status:'รอตรวจสอบ'}]);const all=[];for(const x of rows){const d=await api('getApplicationDetail',[state.staffToken,x.application.applicationId]);d.documents.forEach(doc=>all.push({doc,app:x.application}))}
+  document.getElementById('documentQueue').innerHTML=all.length?`<div class="table-wrap"><table><thead><tr><th>ใบสมัคร</th><th>ประเภท</th><th>ไฟล์</th><th>สถานะ</th><th>การทำงาน</th></tr></thead><tbody>${all.map(x=>`<tr><td>${esc(x.app.applicationNo)}</td><td>${esc(x.doc.documentType)}</td><td><a href="${esc(x.doc.driveUrl)}" target="_blank">${esc(x.doc.fileName)}</a></td><td>${badge(x.doc.status)}</td><td><button class="btn btn-success btn-sm" onclick="reviewDoc('${esc(x.doc.documentId)}','APPROVED')">อนุมัติ</button> <button class="btn btn-danger btn-sm" onclick="reviewDoc('${esc(x.doc.documentId)}','REJECTED')">ปฏิเสธ</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">ไม่มีรายการ</div>'}catch(e){}
+}
+async function reviewDoc(id,status){
+  let note='';
+  if(status==='REJECTED'){const r=await Swal.fire({title:'เหตุผลที่ให้ส่งใหม่',input:'textarea',inputPlaceholder:'ระบุรายละเอียดที่ต้องแก้ไข',showCancelButton:true,confirmButtonText:'บันทึก'});if(!r.isConfirmed)return;note=r.value||''}
+  try{await api('reviewDocument',[state.staffToken,id,status,note]);await ok('บันทึกผลตรวจแล้ว');loadDocumentQueue()}catch(e){}
+}
+function staffPaymentsHTML(){return `<div class="card"><div class="card-title">ตรวจสอบการชำระเงิน</div>
+  <div class="notice">รองรับการตรวจสลิป และนำเข้า CSV/TXT จากธนาคาร โดยไฟล์ควรมีเลขที่สมัครหรือเลขบัตรประชาชน และสามารถมีเลขอ้างอิง ยอดเงิน วันที่ เวลา</div>
+  <div class="actions"><button class="btn btn-primary" onclick="loadPayments()">โหลดรายการรอตรวจ</button><input type="file" id="bankCsv" accept=".csv,.txt"></div>
+  <button class="btn btn-light" onclick="importBankNow()">นำเข้าไฟล์ธนาคาร</button>
+  <div id="paymentQueue" style="margin-top:10px"></div></div>`}
+async function importBankNow(){
+  const f=document.getElementById('bankCsv').files[0];if(!f)return Swal.fire('กรุณาเลือกไฟล์','','warning');
+  try{const csv=await f.text();const r=await api('importBankPayments',[state.staffToken,{csv:csv}]);await ok('นำเข้าไฟล์ธนาคารแล้ว',`จับคู่ ${fmt(r.matched)} รายการ | อัปเดต ${fmt(r.updated)} | ข้าม ${fmt(r.skipped)}`);loadPayments()}catch(e){}
+}
+async function loadPayments(){
+  try{const rows=await api('listPayments',[state.staffToken,{status:'PENDING'}]);document.getElementById('paymentQueue').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>ใบสมัคร</th><th>จำนวนเงิน</th><th>วิธี</th><th>อ้างอิง</th><th>หลักฐาน</th><th>การทำงาน</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.application.applicationNo)}</td><td>${fmt(x.amount)}</td><td>${esc(x.method)}</td><td>${esc(x.referenceNo)}</td><td>${x.slipDocumentId?`<button class="btn btn-light btn-sm" onclick="openSlip('${esc(x.slipDocumentId)}')">ดูเอกสาร</button>`:''}</td><td><button class="btn btn-success btn-sm" onclick="verifyPay('${esc(x.paymentId)}','VERIFIED')">ยืนยัน</button> <button class="btn btn-danger btn-sm" onclick="verifyPay('${esc(x.paymentId)}','REJECTED')">ปฏิเสธ</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">ไม่มีรายการรอตรวจ</div>'}catch(e){}
+}
+async function openSlip(docId){
+  try{const d=await api('getApplicationDetail',[state.staffToken,(await api('listPayments',[state.staffToken,{}])).find(x=>x.slipDocumentId===docId)?.applicationId]);const x=d?.documents?.find(y=>y.documentId===docId);if(x)window.open(x.driveUrl,'_blank')}catch(e){}
+}
+async function verifyPay(id,status){
+  let note='';if(status==='REJECTED'){const r=await Swal.fire({title:'เหตุผล',input:'textarea',showCancelButton:true,confirmButtonText:'บันทึก'});if(!r.isConfirmed)return;note=r.value||''}
+  try{await api('verifyPayment',[state.staffToken,id,status,note]);await ok('บันทึกแล้ว');loadPayments()}catch(e){}
+}
+function staffExamsHTML(){
+  return `<div class="card"><div class="card-title">จัดการสอบ</div>
+  <div class="form-grid"><div class="form-group"><label>รอบ</label><select id="examRound">${state.rounds.map(r=>`<option value="${esc(r.roundId)}">${esc(r.roundName)}</option>`).join('')}</select></div>
+  <div class="form-group"><label>วันสอบ</label><input id="examDate" type="date"></div><div class="form-group"><label>อาคาร</label><input id="examBuilding"></div>
+  <div class="form-group"><label>ห้องสอบ คั่นด้วย ,</label><input id="examRooms" placeholder="ห้อง 101, ห้อง 102"></div><div class="form-group"><label>จำนวนที่นั่งต่อห้อง</label><input id="seatsPerRoom" type="number" value="30"></div><div class="form-group"><label>เวลา</label><input id="examTime" placeholder="09:00 - 12:00"></div></div>
+  <div class="actions" style="margin-top:10px"><button class="btn btn-primary" onclick="assignSeatsNow()">จัดเลขที่นั่งอัตโนมัติ</button><button class="btn btn-light" onclick="loadExams()">ดูรายการ</button></div>
+  <hr><div class="card-title">นำเข้าคะแนนจาก CSV</div><div class="help">หัวตารางขั้นต่ำ: เลขบัตรประชาชน, วิชา, คะแนน และถ้ามีคะแนนเต็มให้เพิ่ม คะแนนเต็ม</div><input type="file" id="scoreCsv" accept=".csv"><button class="btn btn-light" onclick="importScoreNow()">นำเข้าคะแนน</button><div id="examResults"></div></div>`;
+}
+async function assignSeatsNow(){
+  try{const r=await api('assignSeats',[state.staffToken,{roundId:document.getElementById('examRound').value,examDate:document.getElementById('examDate').value,building:document.getElementById('examBuilding').value,rooms:document.getElementById('examRooms').value,seatsPerRoom:document.getElementById('seatsPerRoom').value,examTime:document.getElementById('examTime').value}]);await ok('จัดเลขที่นั่งสำเร็จ',fmt(r.count)+' รายการ')}catch(e){}
+}
+async function loadExams(){
+  try{const r=await api('listExams',[state.staffToken,document.getElementById('examRound').value]);document.getElementById('examResults').innerHTML=`<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>เลขที่</th><th>ชื่อ</th><th>ห้อง</th><th>ที่นั่ง</th><th>เวลา</th></tr></thead><tbody>${r.map(x=>`<tr><td>${esc(x.application.applicationNo)}</td><td>${esc(x.application.firstName)} ${esc(x.application.lastName)}</td><td>${esc(x.exam.room)}</td><td>${esc(x.exam.seatNo)}</td><td>${esc(x.exam.examTime)}</td></tr>`).join('')}</tbody></table></div>`}catch(e){}
+}
+async function importScoreNow(){
+  const f=document.getElementById('scoreCsv').files[0];if(!f)return Swal.fire('กรุณาเลือกไฟล์','','warning');
+  try{const file=await f.text();const r=await api('importScores',[state.staffToken,{csv:file}]);await ok('นำเข้าคะแนนสำเร็จ',fmt(r.count)+' รายการ')}catch(e){}
+}
+function staffResultsHTML(){
+  return `<div class="card"><div class="card-title">ผลสอบและผลการคัดเลือก</div>
+  <div class="form-grid"><div class="form-group"><label>รอบ</label><select id="resultRound">${state.rounds.map(r=>`<option value="${esc(r.roundId)}">${esc(r.roundName)}</option>`).join('')}</select></div></div>
+  <div class="actions" style="margin:10px 0"><button class="btn btn-primary" onclick="loadEligibleForResults()">โหลดผู้มีสิทธิ์สอบ</button></div><div id="resultList"></div></div>`;
+}
+async function loadEligibleForResults(){
+  try{const r=await api('listApplications',[state.staffToken,{roundId:document.getElementById('resultRound').value,status:'มีสิทธิ์สอบ'}]);document.getElementById('resultList').innerHTML=r.length?`<div class="table-wrap"><table><thead><tr><th>เลขที่</th><th>ชื่อ</th><th>แผน</th><th>ผล</th></tr></thead><tbody>${r.map(x=>`<tr><td>${esc(x.application.applicationNo)}</td><td>${esc(x.application.firstName)} ${esc(x.application.lastName)}</td><td>${esc(x.program.programName)}</td><td><select class="resultSelect" data-id="${esc(x.application.applicationId)}"><option value="SELECTED">ผ่านการคัดเลือก</option><option value="WAITLIST">ตัวสำรอง</option><option value="NOT_SELECTED">ไม่ผ่านการคัดเลือก</option></select></td></tr>`).join('')}</tbody></table></div><button class="btn btn-primary" style="margin-top:10px" onclick="publishResultsNow()">เผยแพร่ผล</button>`:'<div class="empty">ไม่พบผู้มีสิทธิ์สอบ</div>'}catch(e){}
+}
+async function publishResultsNow(){
+  const items=[...document.querySelectorAll('.resultSelect')].map(x=>({applicationId:x.dataset.id,status:x.value}));
+  try{await api('publishResults',[state.staffToken,document.getElementById('resultRound').value,items]);await ok('เผยแพร่ผลสำเร็จ')}catch(e){}
+}
+function staffRoundsHTML(){
+  return `<div class="card"><div class="card-title">จัดการรอบรับสมัคร</div>
+  <div class="notice">ต้องสร้างและเปิดรอบรับสมัครก่อน ผู้สมัครจึงจะสามารถเลือกและส่งใบสมัครได้ สามารถเปิดหลายรอบพร้อมกันได้</div>
+  ${roundFormHTML()}<hr><div class="table-wrap"><table><thead><tr><th>ปี</th><th>รอบ</th><th>ช่วงรับสมัคร</th><th>สอบ</th><th>ค่าธรรมเนียม</th><th>สถานะ</th><th>การทำงาน</th></tr></thead><tbody>${state.rounds.map(r=>`<tr><td>${esc(r.academicYear)}</td><td>${esc(r.roundName)}</td><td>${esc(r.openDate)} ถึง ${esc(r.closeDate)}</td><td>${esc(r.examDate)}</td><td>${fmt(r.fee)}</td><td>${badge(r.status)}</td><td><button class="btn btn-light btn-sm" onclick="editRound('${esc(r.roundId)}')">แก้ไข</button> <button class="btn btn-primary btn-sm" onclick="toggleRound('${esc(r.roundId)}','${r.status==='OPEN'?'CLOSED':'OPEN'}')">${r.status==='OPEN'?'ปิดรอบ':'เปิดรอบ'}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+}
+function roundFormHTML(r={}){
+  return `<div class="card" style="background:#fafbfc"><div class="card-title">เพิ่ม/แก้ไขรอบรับสมัคร</div>
+  <input type="hidden" id="roundId" value="${esc(r.roundId||'')}">
+  <div class="form-grid"><div class="form-group"><label>ปีการศึกษา <span class="required">*</span></label><input id="roundYear" value="${esc(r.academicYear||'')}"></div>
+  <div class="form-group"><label>ชื่อรอบ <span class="required">*</span></label><input id="roundName" placeholder="เช่น รอบทั่วไป" value="${esc(r.roundName||'')}"></div>
+  <div class="form-group"><label>ประเภทรอบ</label><select id="roundType"><option>ทั่วไป</option><option>โควตา</option><option>ความสามารถพิเศษ</option><option>อื่น ๆ</option></select></div>
+  <div class="form-group"><label>สถานะ</label><select id="roundStatus"><option value="DRAFT">ร่าง</option><option value="OPEN">เปิดรับสมัคร</option><option value="CLOSED">ปิดรับสมัคร</option></select></div>
+  <div class="form-group"><label>วันเปิดรับสมัคร <span class="required">*</span></label><input id="roundOpen" type="date" value="${esc(r.openDate||'')}"></div>
+  <div class="form-group"><label>วันปิดรับสมัคร <span class="required">*</span></label><input id="roundClose" type="date" value="${esc(r.closeDate||'')}"></div>
+  <div class="form-group"><label>วันสอบ</label><input id="roundExam" type="date" value="${esc(r.examDate||'')}"></div>
+  <div class="form-group"><label>วันประกาศผล</label><input id="roundResult" type="date" value="${esc(r.resultDate||'')}"></div>
+  <div class="form-group"><label>เริ่มยืนยันสิทธิ์</label><input id="roundConfirmStart" type="date" value="${esc(r.confirmStart||'')}"></div>
+  <div class="form-group"><label>สิ้นสุดยืนยันสิทธิ์</label><input id="roundConfirmEnd" type="date" value="${esc(r.confirmEnd||'')}"></div>
+  <div class="form-group"><label>ค่าธรรมเนียม (บาท)</label><input id="roundFee" type="number" min="0" value="${esc(r.fee||0)}"></div>
+  <div class="form-group"><label>จำนวนผู้สมัครสูงสุด</label><input id="roundMax" type="number" min="0" value="${esc(r.maxApplicants||0)}"></div>
+  <div class="form-group full"><label>รายละเอียด/ระเบียบการ</label><textarea id="roundDesc">${esc(r.description||'')}</textarea></div></div>
+  <button class="btn btn-primary" onclick="saveRoundNow()">บันทึกรอบรับสมัคร</button></div>`;
+}
+async function saveRoundNow(){
+  const v=id=>document.getElementById(id).value;
+  try{await api('saveRound',[state.staffToken,{roundId:v('roundId'),academicYear:v('roundYear'),roundName:v('roundName'),roundType:v('roundType'),status:v('roundStatus'),openDate:v('roundOpen'),closeDate:v('roundClose'),examDate:v('roundExam'),resultDate:v('roundResult'),confirmStart:v('roundConfirmStart'),confirmEnd:v('roundConfirmEnd'),fee:v('roundFee'),maxApplicants:v('roundMax'),description:v('roundDesc')}]);await ok('บันทึกรอบรับสมัครแล้ว');await loadStaffData();staffSection('rounds')}catch(e){}
+}
+function editRound(id){
+  const r=state.rounds.find(x=>String(x.roundId)===String(id));if(!r)return;
+  Swal.fire({title:'แก้ไขรอบรับสมัคร',width:900,html:roundFormHTML(r),showConfirmButton:false,showCloseButton:true});
+  setTimeout(()=>{document.getElementById('roundId').value=r.roundId;document.getElementById('roundType').value=r.roundType;document.getElementById('roundStatus').value=r.status;document.querySelector('[onclick="saveRoundNow()"]').onclick=async()=>{const v=id=>document.getElementById(id).value;try{await api('saveRound',[state.staffToken,{roundId:v('roundId'),academicYear:v('roundYear'),roundName:v('roundName'),roundType:v('roundType'),status:v('roundStatus'),openDate:v('roundOpen'),closeDate:v('roundClose'),examDate:v('roundExam'),resultDate:v('roundResult'),confirmStart:v('roundConfirmStart'),confirmEnd:v('roundConfirmEnd'),fee:v('roundFee'),maxApplicants:v('roundMax'),description:v('roundDesc')}]);Swal.close();await loadStaffData();staffSection('rounds')}catch(e){} }},50);
+}
+async function toggleRound(id,status){try{await api('toggleRound',[state.staffToken,id,status]);await loadStaffData();staffSection('rounds')}catch(e){}}
+function staffProgramsHTML(){
+  return `<div class="card"><div class="card-title">จัดการแผนการเรียน / โควตา</div>
+  <div class="form-grid"><div class="form-group"><label>รอบ</label><select id="progRound">${state.rounds.map(r=>`<option value="${esc(r.roundId)}">${esc(r.roundName)}</option>`).join('')}</select></div>
+  <div class="form-group"><label>ชื่อแผนการเรียน</label><input id="progName"></div><div class="form-group"><label>รหัสแผน</label><input id="progCode"></div>
+  <div class="form-group"><label>ชื่อโควตา</label><input id="progQuota"></div><div class="form-group"><label>ประเภทโควตา</label><select id="progQuotaType"><option>ทั่วไป</option><option>พื้นที่</option><option>ความสามารถพิเศษ</option><option>อื่น ๆ</option></select></div>
+  <div class="form-group"><label>จำนวนรับ</label><input id="progCapacity" type="number" min="1"></div><div class="form-group"><label>GPA ขั้นต่ำ</label><input id="progGpa" type="number" min="0" max="4" step="0.01" value="0"></div>
+  <div class="form-group full"><label>รายละเอียด</label><textarea id="progDesc"></textarea></div></div>
+  <button class="btn btn-primary" onclick="saveProgramNow()">เพิ่มแผนการเรียน</button><hr>
+  <div class="table-wrap"><table><thead><tr><th>รอบ</th><th>แผน</th><th>โควตา</th><th>รับ</th><th>GPA</th><th>สถานะ</th></tr></thead><tbody>${state.programs.map(p=>`<tr><td>${esc((state.rounds.find(r=>r.roundId===p.roundId)||{}).roundName||p.roundId)}</td><td>${esc(p.programName)}</td><td>${esc(p.quotaName)}</td><td>${fmt(p.capacity)}</td><td>${esc(p.minimumGpa)}</td><td>${badge(p.status)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+async function saveProgramNow(){
+  const v=id=>document.getElementById(id).value;
+  try{await api('saveProgram',[state.staffToken,{roundId:v('progRound'),programName:v('progName'),programCode:v('progCode'),quotaName:v('progQuota'),quotaType:v('progQuotaType'),capacity:v('progCapacity'),minimumGpa:v('progGpa'),description:v('progDesc')}]);await ok('เพิ่มแผนการเรียนแล้ว');await loadStaffData();staffSection('programs')}catch(e){}
+}
+function staffUsersHTML(){return `<div class="card"><div class="card-title">จัดการผู้ใช้งาน</div>
+  <div class="notice">สิทธิ์: ADMIN ผู้ดูแลระบบ, OFFICER เจ้าหน้าที่รับสมัคร, FINANCE การเงิน, ACADEMIC ฝ่ายวิชาการ</div>
+  <div class="form-grid"><div class="form-group"><label>ชื่อผู้ใช้</label><input id="newUser"></div><div class="form-group"><label>ชื่อแสดง</label><input id="newDisplay"></div>
+  <div class="form-group"><label>รหัสผ่าน</label><input id="newPass" type="password"></div><div class="form-group"><label>สิทธิ์</label><select id="newRole"><option>OFFICER</option><option>FINANCE</option><option>ACADEMIC</option><option>ADMIN</option></select></div></div>
+  <button class="btn btn-primary" onclick="saveUserNow()">เพิ่มผู้ใช้งาน</button><hr><div id="usersList"></div><button class="btn btn-light" onclick="loadUsers()">โหลดรายชื่อผู้ใช้</button></div>`}
+async function loadUsers(){try{const r=await api('listUsers',[state.staffToken]);document.getElementById('usersList').innerHTML=`<div class="table-wrap"><table><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อแสดง</th><th>สิทธิ์</th><th>สถานะ</th><th>เข้าสู่ระบบล่าสุด</th></tr></thead><tbody>${r.map(x=>`<tr><td>${esc(x.username)}</td><td>${esc(x.displayName)}</td><td>${esc(x.role)}</td><td>${badge(x.status)}</td><td>${esc(x.lastLoginAt)}</td></tr>`).join('')}</tbody></table></div>`}catch(e){}}
+async function saveUserNow(){try{await api('saveUser',[state.staffToken,{username:document.getElementById('newUser').value,displayName:document.getElementById('newDisplay').value,password:document.getElementById('newPass').value,role:document.getElementById('newRole').value}]);await ok('เพิ่มผู้ใช้งานแล้ว');loadUsers()}catch(e){}}
+async function loadSettingsIntoUI(){
+  try{const s=await api('getAdminSettings',[state.staffToken]);document.getElementById('settingsBox').innerHTML=`<div class="form-grid">
+  <div class="form-group full"><label>ชื่อโรงเรียน</label><input id="setSchool" value="${esc(s.schoolName||'')}"></div>
+  <div class="form-group"><label>หัวข้อหน้าแรก</label><input id="setTitle" value="${esc(s.homeTitle||'')}"></div><div class="form-group"><label>คำโปรย</label><input id="setSubtitle" value="${esc(s.homeSubtitle||'')}"></div>
+  <div class="form-group full"><label>ประกาศหน้าแรก</label><textarea id="setNotice">${esc(s.homeNotice||'')}</textarea></div>
+  <div class="form-group full"><label>ข้อความ PDPA</label><textarea id="setPdpa">${esc(s.pdpaText||'')}</textarea></div>
+  <div class="form-group"><label>โทรศัพท์</label><input id="setPhone" value="${esc(s.contactPhone||'')}"></div><div class="form-group"><label>อีเมล</label><input id="setEmail" value="${esc(s.contactEmail||'')}"></div>
+  <div class="form-group full"><label>ที่อยู่</label><textarea id="setAddress">${esc(s.address||'')}</textarea></div>
+  <div class="form-group"><label>โลโก้โรงเรียน</label><input id="setLogoFile" type="file" accept=".jpg,.jpeg,.png,.webp"></div>
+  <div class="form-group"><label>แบนเนอร์</label><input id="setBannerFile" type="file" accept=".jpg,.jpeg,.png,.webp"></div>
+  <div class="form-group"><label>แผนที่สถานที่สอบ</label><input id="setMapFile" type="file" accept=".jpg,.jpeg,.png,.webp"></div>
+  </div><div class="actions"><button class="btn btn-primary" onclick="saveSettingsNow()">บันทึกข้อความ</button><button class="btn btn-light" onclick="uploadSettingImg('logo','setLogoFile')">อัปโหลดโลโก้</button><button class="btn btn-light" onclick="uploadSettingImg('banner','setBannerFile')">อัปโหลดแบนเนอร์</button><button class="btn btn-light" onclick="uploadSettingImg('map','setMapFile')">อัปโหลดแผนที่</button></div>`}catch(e){}
+}
+function staffSettingsHTML(){setTimeout(loadSettingsIntoUI,50);return `<div class="card"><div class="card-title">ตั้งค่าระบบ</div><div id="settingsBox">กำลังโหลด...</div></div>`}
+async function saveSettingsNow(){
+  const pairs={schoolName:document.getElementById('setSchool').value,homeTitle:document.getElementById('setTitle').value,homeSubtitle:document.getElementById('setSubtitle').value,homeNotice:document.getElementById('setNotice').value,pdpaText:document.getElementById('setPdpa').value,contactPhone:document.getElementById('setPhone').value,contactEmail:document.getElementById('setEmail').value,address:document.getElementById('setAddress').value};
+  try{for(const k in pairs)await api('saveSetting',[state.staffToken,k,pairs[k]]);await ok('บันทึกการตั้งค่าแล้ว');state.publicData=await api('getPublicBootstrap');setBrand()}catch(e){}
+}
+async function uploadSettingImg(kind,id){
+  const f=document.getElementById(id).files[0];if(!f)return Swal.fire('กรุณาเลือกไฟล์','','warning');
+  try{const file=await fileToBase64(f);await api('uploadSettingImage',[state.staffToken,{kind:kind,file:file}]);await ok('อัปโหลดสำเร็จ')}catch(e){}
+}
+function staffReportsHTML(){return `<div class="card"><div class="card-title">รายงานและ Export</div><div class="notice">สามารถส่งออกข้อมูลเป็น CSV/Excel และสร้าง PDF ทางการตามประเภทที่เลือก</div>
+  <div class="form-grid"><div class="form-group"><label>รอบ</label><select id="reportRound"><option value="">ทุกรอบ</option>${state.rounds.map(r=>`<option value="${esc(r.roundId)}">${esc(r.roundName)}</option>`).join('')}</select></div></div>
+  <div class="actions" style="margin-top:12px;flex-wrap:wrap"><button class="btn btn-light" onclick="exportReport('csv')">CSV ผู้สมัคร</button><button class="btn btn-light" onclick="exportReport('xlsx')">Excel ผู้สมัคร</button><button class="btn btn-primary" onclick="exportReport('pdf','all')">PDF ผู้สมัครทั้งหมด</button><button class="btn btn-primary" onclick="exportReport('pdf','eligible')">PDF ผู้มีสิทธิ์สอบ</button><button class="btn btn-success" onclick="exportReport('pdf','selected')">PDF ผ่านการคัดเลือก</button><button class="btn btn-gold" onclick="exportReport('pdf','waitlist')">PDF ตัวสำรอง</button><button class="btn btn-light" onclick="exportReport('pdf','confirmed')">PDF ยืนยันสิทธิ์</button></div></div>`}
+async function exportReport(format,type='all'){
+  try{const filters={roundId:document.getElementById('reportRound').value};let r;
+    if(format==='csv')r=await api('exportApplicationsCsv',[state.staffToken,filters]);
+    else if(format==='xlsx')r=await api('exportApplicationsXlsx',[state.staffToken,filters]);
+    else r=await api('exportPdf',[state.staffToken,type,filters]);
+    downloadDataUrl(r.data,r.fileName);
+  }catch(e){}
+}
+function staffLogout(){state.staffToken=null;state.staff=null;state.dashboardStaff=null;showHome()}
+</script>
